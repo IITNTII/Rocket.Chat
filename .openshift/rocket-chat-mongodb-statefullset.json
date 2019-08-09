@@ -1,0 +1,491 @@
+{
+    "kind": "Template",
+    "apiVersion": "v1",
+    "metadata": {
+        "name": "rocket-chat",
+        "annotations": {
+            "description": "Rocket.Chat with a MongoDB database running with a Persistent storage. Use this template if you want to run Rocket.Chat in production.",
+            "tags": "quickstart,nodejs,mongodb,instant-app",
+            "iconClass": "icon-nodejs"
+        }
+    },
+    "objects": [
+        {
+            "kind": "StatefulSet",
+            "apiVersion": "apps/v1beta1",
+            "metadata": {
+                "name": "mongodb-petset-replication"
+            },
+            "spec": {
+                "serviceName": "${MONGODB_SERVICE_NAME}-internal",
+                "replicas": 3,
+                "template": {
+                    "metadata": {
+                        "labels": {
+                            "name": "${MONGODB_SERVICE_NAME}"
+                        }
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "mongo-container",
+                                "image": "centos/mongodb-34-centos7",
+                                "ports": [
+                                    {
+                                        "containerPort": 27017
+                                    }
+                                ],
+                                "args": [
+                                    "run-mongod-pet"
+                                ],
+                                "volumeMounts": [
+                                    {
+                                        "name": "mongodb-data",
+                                        "mountPath": "/var/lib/mongodb/data"
+                                    },
+                                    {
+                                        "name": "mongodb-init-scripts-vol",
+                                        "mountPath": "/usr/share/container-scripts/mongodb/start/99-create-oplog-user.sh",
+                                        "subPath": "99-create-oplog-user.sh"
+                                    }
+                                ],
+                                "env": [
+                                    {
+                                        "name": "MONGODB_USER",
+                                        "value": "${MONGODB_USER}"
+                                    },
+                                    {
+                                        "name": "MONGODB_PASSWORD",
+                                        "value": "${MONGODB_PASSWORD}"
+                                    },
+                                    {
+                                        "name": "MONGODB_DATABASE",
+                                        "value": "${MONGODB_DATABASE}"
+                                    },
+                                    {
+                                        "name": "MONGODB_ADMIN_PASSWORD",
+                                        "value": "${MONGODB_ADMIN_PASSWORD}"
+                                    },
+                                    {
+                                        "name": "MONGODB_OPLOGGER_PASSWORD",
+                                        "value": "${MONGODB_OPLOGGER_PASSWORD}"
+                                    },
+                                    {
+                                        "name": "MONGODB_REPLICA_NAME",
+                                        "value": "${MONGODB_REPLICA_NAME}"
+                                    },
+                                    {
+                                        "name": "MONGODB_KEYFILE_VALUE",
+                                        "value": "${MONGODB_KEYFILE_VALUE}"
+                                    },
+                                    {
+                                        "name": "MONGODB_SERVICE_NAME",
+                                        "value": "${MONGODB_SERVICE_NAME}-internal"
+                                    }
+                                ],
+                                "resources": {
+                                    "limits": {
+                                        "memory": "${MEMORY_LIMIT}"
+                                    }
+                                },
+                                "readinessProbe": {
+                                    "exec": {
+                                        "command": [
+                                            "stat",
+                                            "/tmp/initialized"
+                                        ]
+                                    }
+                                }
+                            }
+                        ],
+                        "volumes": [
+                            {
+                                "name": "mongodb-init-scripts-vol",
+                                "configMap": {
+                                    "name": "mongodb-init-scripts"
+                                }
+                            }
+                        ]
+                    }
+                },
+                "volumeClaimTemplates": [
+                    {
+                        "metadata": {
+                            "name": "mongodb-data",
+                            "annotations": null
+                        },
+                        "spec": {
+                            "accessModes": [
+                                "ReadWriteOnce"
+                            ],
+                            "resources": {
+                                "requests": {
+                                    "storage": "${VOLUME_CAPACITY}"
+                                }
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "kind": "Service",
+            "apiVersion": "v1",
+            "metadata": {
+                "name": "${MONGODB_SERVICE_NAME}"
+            },
+            "spec": {
+                "ports": [
+                    {
+                        "name": "mongodb",
+                        "port": 27017
+                    }
+                ],
+                "selector": {
+                    "name": "${MONGODB_SERVICE_NAME}"
+                }
+            }
+        },
+        {
+            "kind": "Service",
+            "apiVersion": "v1",
+            "metadata": {
+                "name": "${MONGODB_SERVICE_NAME}-internal",
+                "annotations": {
+                    "service.alpha.kubernetes.io/tolerate-unready-endpoints": "true"
+                }
+            },
+            "spec": {
+                "clusterIP": "None",
+                "ports": [
+                    {
+                        "name": "mongodb",
+                        "port": 27017,
+                        "targetPort": 27017
+                    }
+                ],
+                "selector": {
+                    "name": "${MONGODB_SERVICE_NAME}"
+                }
+            }
+        },
+        {
+			"kind": "ConfigMap",
+			"apiVersion": "v1",
+			"metadata": {
+				"name": "mongodb-init-scripts"
+			},
+			"data": {
+				"99-create-oplog-user.sh": "function mongo_create_oplog_user() {\n  local js_command=\"db.createUser({user:'oplogger', pwd: '$MONGODB_OPLOGGER_PASSWORD', roles: [{role: 'read', db: 'local'}]})\"\n\n  if ! mongo_cmd --host \"localhost\" admin ${1:-} <<<\"$js_command\"; then\n    echo >&2 \"=> Failed to create MongoDB oplogger user.\"\n    exit 1\n  fi\n}\n\nif [ \"${MEMBER_ID}\" -eq 0 ]; then\n  info \"Creating MongoDB oplog user ...\"\n  mongo_create_oplog_user \"-u admin -p$MONGODB_ADMIN_PASSWORD\"\n  info \"Finish creating oplog user!\"\nfi\n"
+			}
+		},
+        {
+            "kind": "ImageStream",
+            "apiVersion": "v1",
+            "metadata": {
+                "name": "rocketchat"
+            },
+            "spec": {
+                "dockerImageRepository": "${ROCKETCHAT_IMAGE}",
+                "tags": [
+                    {
+                        "name": "latest",
+                        "annotations": {
+                            "description": "Provides a Rocket.Chat application",
+                            "iconClass": "icon-nodejs",
+                            "tags": "rocketchat"
+                        },
+                        "from": {
+                            "kind": "ImageStreamTag",
+                            "name": "latest"
+                        },
+                        "generation": 1,
+                        "importPolicy": {}
+                    }
+                ]
+            }
+        },
+        {
+            "kind": "DeploymentConfig",
+            "apiVersion": "v1",
+            "metadata": {
+                "name": "rocketchat",
+                "creationTimestamp": null,
+                "labels": {
+                    "app": "rocketchat"
+                },
+                "annotations": {
+                    "openshift.io/generated-by": "OpenShiftNewApp"
+                }
+            },
+            "spec": {
+                "strategy": {
+                    "type": "Rolling",
+                    "rollingParams": {
+                        "updatePeriodSeconds": 1,
+                        "intervalSeconds": 1,
+                        "timeoutSeconds": 600,
+                        "maxUnavailable": "25%",
+                        "maxSurge": "25%"
+                    },
+                    "resources": {}
+                },
+                "triggers": [
+                    {
+                        "type": "ConfigChange"
+                    },
+                    {
+                        "type": "ImageChange",
+                        "imageChangeParams": {
+                            "automatic": true,
+                            "containerNames": [
+                                "rocketchat"
+                            ],
+                            "from": {
+                                "kind": "ImageStreamTag",
+                                "name": "rocketchat:latest"
+                            }
+                        }
+                    }
+                ],
+                "replicas": 1,
+                "test": false,
+                "selector": {
+                    "app": "rocketchat",
+                    "deploymentconfig": "rocketchat"
+                },
+                "template": {
+                    "metadata": {
+                        "creationTimestamp": null,
+                        "labels": {
+                            "app": "rocketchat",
+                            "deploymentconfig": "rocketchat"
+                        },
+                        "annotations": {
+                            "openshift.io/container.rocketchat.image.entrypoint": "[\"node\",\"main.js\"]",
+                            "openshift.io/generated-by": "OpenShiftNewApp"
+                        }
+                    },
+                    "spec": {
+                        "volumes": [
+                            {
+                                "name": "rocketchat-volume-1",
+                                "emptyDir": {}
+                            }
+                        ],
+                        "containers": [
+                            {
+                                "name": "rocketchat",
+                                "image": "${ROCKETCHAT_IMAGE}:latest",
+                                "ports": [
+                                    {
+                                        "containerPort": 3000,
+                                        "protocol": "TCP"
+                                    }
+                                ],
+                                "env": [
+                                    {
+                                        "name": "MONGO_URL",
+                                        "value": "mongodb://${MONGODB_USER}:${MONGODB_PASSWORD}@${MONGODB_SERVICE_NAME}-internal:27017/${MONGODB_DATABASE}&replicaSet=${MONGODB_REPLICA_NAME}"
+                                    },
+                                    {
+                                        "name": "MONGODB_OPLOG_URL",
+                                        "value": "mongodb://oplogger:${MONGODB_OPLOGGER_PASSWORD}@${MONGODB_SERVICE_NAME}-internal:27017/local?authSource=admin&replicaSet=${MONGODB_REPLICA_NAME}"
+                                    },
+                                    {
+                                        "name": "INSTANCE_IP",
+                                        "valueFrom": {
+                                            "fieldRef": {
+                                                "fieldPath": "status.podIP"
+                                            }
+                                        }
+                                      }
+                                ],
+                                "resources": {},
+                                "volumeMounts": [
+                                    {
+                                        "name": "rocketchat-volume-1",
+                                        "mountPath": "/app/uploads"
+                                    }
+                                ],
+                                "readinessProbe": {
+                                    "httpGet": {
+                                        "path": "/api/v1/info",
+                                        "port": 3000,
+                                        "scheme": "HTTP"
+                                    },
+                                    "initialDelaySeconds": 5,
+                                    "timeoutSeconds": 1,
+                                    "periodSeconds": 10,
+                                    "successThreshold": 1,
+                                    "failureThreshold": 3
+                                },
+                                "livenessProbe": {
+                                    "httpGet": {
+                                        "path": "/api/v1/info",
+                                        "port": 3000,
+                                        "scheme": "HTTP"
+                                    },
+                                    "initialDelaySeconds": 30,
+                                    "timeoutSeconds": 1,
+                                    "periodSeconds": 10,
+                                    "successThreshold": 1,
+                                    "failureThreshold": 3
+                                },
+                                "terminationMessagePath": "/dev/termination-log",
+                                "imagePullPolicy": "Always"
+                            }
+                        ],
+                        "restartPolicy": "Always",
+                        "terminationGracePeriodSeconds": 30,
+                        "dnsPolicy": "ClusterFirst",
+                        "securityContext": {}
+                    }
+                }
+            },
+            "status": {}
+        },
+        {
+            "kind": "Route",
+            "apiVersion": "v1",
+            "metadata": {
+                "name": "rocketchat",
+                "creationTimestamp": null,
+                "labels": {
+                    "app": "rocketchat"
+                },
+                "annotations": {
+                    "openshift.io/host.generated": "true"
+                }
+            },
+            "spec": {
+                "to": {
+                    "kind": "Service",
+                    "name": "rocketchat"
+                },
+                "port": {
+                    "targetPort": "3000-tcp"
+                }
+            },
+            "status": {
+                "ingress": null
+            }
+        },
+        {
+            "kind": "Service",
+            "apiVersion": "v1",
+            "metadata": {
+                "name": "rocketchat",
+                "creationTimestamp": null,
+                "labels": {
+                    "app": "rocketchat"
+                },
+                "annotations": {
+                    "openshift.io/generated-by": "OpenShiftNewApp"
+                }
+            },
+            "spec": {
+                "ports": [
+                    {
+                        "name": "3000-tcp",
+                        "protocol": "TCP",
+                        "port": 3000,
+                        "targetPort": 3000
+                    }
+                ],
+                "selector": {
+                    "app": "rocketchat",
+                    "deploymentconfig": "rocketchat"
+                },
+                "type": "ClusterIP",
+                "sessionAffinity": "None"
+            },
+            "status": {
+                "loadBalancer": {}
+            }
+        }
+    ],
+    "parameters": [
+        {
+            "name": "MEMORY_LIMIT",
+            "displayName": "Memory Limit",
+            "description": "Maximum amount of memory the container can use.",
+            "value": "512Mi"
+        },
+        {
+            "name": "MONGODB_SERVICE_NAME",
+            "displayName": "MongoDB Service Name",
+            "description": "The name of the OpenShift Service exposed for the database.",
+            "value": "mongodb",
+            "required": true
+        },
+        {
+            "name": "MONGODB_USER",
+            "displayName": "MongoDB User",
+            "description": "Username for MongoDB user that will be used for accessing the database.",
+            "generate": "expression",
+            "from": "user[A-Z0-9]{3}",
+            "required": true
+        },
+        {
+            "name": "MONGODB_PASSWORD",
+            "displayName": "MongoDB Password",
+            "description": "Password for the MongoDB user.",
+            "generate": "expression",
+            "from": "[a-zA-Z0-9]{16}",
+            "required": true
+        },
+        {
+            "name": "MONGODB_DATABASE",
+            "displayName": "MongoDB Database Name",
+            "description": "Name of the MongoDB database accessed.",
+            "value": "rocketchatdb",
+            "required": true
+        },
+        {
+            "name": "MONGODB_ADMIN_PASSWORD",
+            "displayName": "MongoDB Admin Password",
+            "description": "Password for the database admin user.",
+            "generate": "expression",
+            "from": "[a-zA-Z0-9]{16}",
+            "required": true
+        },
+        {
+			"name": "MONGODB_OPLOGGER_PASSWORD",
+			"displayName": "MongoDB Admin Password",
+			"description": "Password for the database admin user.",
+			"generate": "expression",
+			"from": "[a-zA-Z0-9]{16}",
+			"required": true
+		},
+		{
+			"name": "MONGODB_REPLICA_NAME",
+			"displayName": "Replica Set Name",
+			"description": "The name of the replica set.",
+			"value": "rs0",
+			"required": true
+		},
+		{
+			"name": "MONGODB_KEYFILE_VALUE",
+			"displayName": "Keyfile Content",
+			"description": "The value of the MongoDB keyfile (https://docs.mongodb.com/manual/core/security-internal-authentication/#internal-auth-keyfile).",
+			"generate": "expression",
+			"from": "[a-zA-Z0-9]{255}",
+			"required": true
+		},
+        {
+            "name": "ROCKETCHAT_IMAGE",
+            "displayName": "RocketChat Image",
+            "description": "The RocketChat image to use for this deployment",
+            "required": true,
+            "value": "rocketchat/rocket.chat"
+        },
+        {
+            "name": "VOLUME_CAPACITY",
+            "displayName": "Volume Capacity",
+            "description": "Volume space available for data, e.g. 512Mi, 2Gi.",
+            "value": "1Gi",
+            "required": true
+        }
+    ]
+}
